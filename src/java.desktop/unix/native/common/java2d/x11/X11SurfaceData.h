@@ -25,6 +25,9 @@
 
 #include "SurfaceData.h"
 
+#include <linux/shm.h>
+#include <dlfcn.h>
+
 #include "awt_p.h"
 #include "awt_GraphicsEnv.h"
 

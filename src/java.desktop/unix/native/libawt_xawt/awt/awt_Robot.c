@@ -54,6 +54,82 @@
 #include <sys/socket.h>
 #endif
 
+#include <linux/shm.h>
+#include <dlfcn.h>
+
+#ifndef shmid_ds
+# define shmid_ds shmid64_ds
+#endif
+
+static void * (*android_shmat)(int shmid, const void *shmaddr, int shmflg) = NULL;
+static int (*android_shmdt)(const void *shmaddr) = NULL;
+static int (*android_shmget)(key_t key, size_t size, int shmflg) = NULL;
+static int (*android_shmctl)(int shmid, int cmd, struct shmid_ds *buf) = NULL;
+
+static void * shmat(int shmid, const void *shmaddr, int shmflg) {
+	if (!android_shmat) {
+		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+
+		if (!handle) {
+				abort();
+		}
+
+		android_shmat = dlsym(handle, "shmat");
+
+		dlclose(handle);
+	}
+
+	return android_shmat(shmid, shmaddr, shmflg);
+}
+
+static int shmdt(const void *shmaddr) {
+	if (!android_shmdt) {
+		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+
+		if (!handle) {
+				abort();
+		}
+
+		android_shmdt = dlsym(handle, "shmdt");
+
+		dlclose(handle);
+	}
+
+	return android_shmdt(shmaddr);
+}
+
+static int shmget(key_t key, size_t size, int shmflg) {
+	if (!android_shmget) {
+		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+
+		if (!handle) {
+				abort();
+		}
+
+		android_shmget = dlsym(handle, "shmget");
+
+		dlclose(handle);
+	}
+
+	return android_shmget(key, size, shmflg);
+}
+
+static int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
+	if (!android_shmctl) {
+		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+
+		if (!handle) {
+				abort();
+		}
+
+		android_shmctl = dlsym(handle, "shmctl");
+
+		dlclose(handle);
+	}
+
+	return android_shmctl(shmid, cmd, buf);
+}
+
 static Bool   (*compositeQueryExtension)   (Display*, int*, int*);
 static Status (*compositeQueryVersion)     (Display*, int*, int*);
 static Window (*compositeGetOverlayWindow) (Display *, Window);
