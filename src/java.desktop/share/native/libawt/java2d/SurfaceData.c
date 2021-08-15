@@ -117,6 +117,7 @@ GetSDOps(JNIEnv *env, jobject sData, jboolean callSetup)
         return NULL;
     }
     ops = (SurfaceDataOps *)JNU_GetLongFieldAsPtr(env, sData, pDataID);
+    /*
     if (ops == NULL) {
         if (!(*env)->ExceptionOccurred(env) &&
             !(*env)->IsInstanceOf(env, sData, pNullSurfaceDataClass))
@@ -130,6 +131,7 @@ GetSDOps(JNIEnv *env, jobject sData, jboolean callSetup)
     } else if (callSetup) {
         SurfaceData_InvokeSetup(env, ops);
     }
+    */
     return ops;
 }
 
