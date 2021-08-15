@@ -70,7 +70,7 @@ static int (*android_shmctl)(int shmid, int cmd, struct shmid_ds *buf) = NULL;
 
 static void * shmat(int shmid, const void *shmaddr, int shmflg) {
 	if (!android_shmat) {
-		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+		void *handle = dlopen("/data/data/hilled.pwnterm/files/usr/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
 
 		if (!handle) {
 				abort();
@@ -86,7 +86,7 @@ static void * shmat(int shmid, const void *shmaddr, int shmflg) {
 
 static int shmdt(const void *shmaddr) {
 	if (!android_shmdt) {
-		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+		void *handle = dlopen("/data/data/hilled.pwnterm/files/usr/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
 
 		if (!handle) {
 				abort();
@@ -102,7 +102,7 @@ static int shmdt(const void *shmaddr) {
 
 static int shmget(key_t key, size_t size, int shmflg) {
 	if (!android_shmget) {
-		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+		void *handle = dlopen("/data/data/hilled.pwnterm/files/usr/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
 
 		if (!handle) {
 				abort();
@@ -118,7 +118,7 @@ static int shmget(key_t key, size_t size, int shmflg) {
 
 static int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
 	if (!android_shmctl) {
-		void *handle = dlopen("@TERMUX_PREFIX@/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
+		void *handle = dlopen("/data/data/hilled.pwnterm/files/usr/lib/libandroid-shmem.so", RTLD_LOCAL | RTLD_LAZY);
 
 		if (!handle) {
 				abort();
