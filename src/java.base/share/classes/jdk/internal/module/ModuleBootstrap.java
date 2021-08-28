@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -147,7 +147,8 @@ public final class ModuleBootstrap {
                getProperty("jdk.module.limitmods") == null &&     // --limit-modules
                getProperty("jdk.module.addreads.0") == null &&    // --add-reads
                getProperty("jdk.module.addexports.0") == null &&  // --add-exports
-               getProperty("jdk.module.addopens.0") == null;      // --add-opens
+               getProperty("jdk.module.addopens.0") == null &&    // --add-opens
+               getProperty("jdk.module.illegalAccess") == null;   // --illegal-access
     }
 
     /**
@@ -188,6 +189,7 @@ public final class ModuleBootstrap {
         String mainModule = System.getProperty("jdk.module.main");
         Set<String> addModules = addModules();
         Set<String> limitModules = limitModules();
+        String illegalAccess = getAndRemoveProperty("jdk.module.illegalAccess");
 
         PrintStream traceOutput = null;
         String trace = getAndRemoveProperty("jdk.module.showModuleResolution");
@@ -219,7 +221,8 @@ public final class ModuleBootstrap {
                 && !haveModulePath
                 && addModules.isEmpty()
                 && limitModules.isEmpty()
-                && !isPatched) {
+                && !isPatched
+                && illegalAccess == null) {
             systemModuleFinder = archivedModuleGraph.finder();
             hasSplitPackages = archivedModuleGraph.hasSplitPackages();
             hasIncubatorModules = archivedModuleGraph.hasIncubatorModules();
@@ -454,12 +457,18 @@ public final class ModuleBootstrap {
             checkIncubatingStatus(cf);
         }
 
-        // --add-reads, --add-exports/--add-opens
+        // --add-reads, --add-exports/--add-opens, and --illegal-access
         addExtraReads(bootLayer);
         boolean extraExportsOrOpens = addExtraExportsAndOpens(bootLayer);
 
-        // add enable native access
-        addEnableNativeAccess(bootLayer);
+        if (illegalAccess != null) {
+            assert systemModules != null;
+            addIllegalAccess(illegalAccess,
+                             systemModules,
+                             upgradeModulePath,
+                             bootLayer,
+                             extraExportsOrOpens);
+        }
 
         Counters.add("jdk.module.boot.7.adjustModulesTime");
 
@@ -773,44 +782,93 @@ public final class ModuleBootstrap {
     }
 
     /**
-     * Process the --enable-native-access option to grant access to restricted methods to selected modules.
+     * Process the --illegal-access option to open packages of system modules
+     * in the boot layer to code in unnamed modules.
      */
-    private static void addEnableNativeAccess(ModuleLayer layer) {
-        for (String name : decodeEnableNativeAccess()) {
-            if (name.equals("ALL-UNNAMED")) {
-                JLA.addEnableNativeAccessAllUnnamed();
-            } else {
-                Optional<Module> module = layer.findModule(name);
-                if (module.isPresent()) {
-                    JLA.addEnableNativeAccess(module.get());
-                } else {
-                    warnUnknownModule(ENABLE_NATIVE_ACCESS, name);
+    private static void addIllegalAccess(String illegalAccess,
+                                         SystemModules systemModules,
+                                         ModuleFinder upgradeModulePath,
+                                         ModuleLayer bootLayer,
+                                         boolean extraExportsOrOpens) {
+
+        if (illegalAccess.equals("deny"))
+            return;  // nothing to do
+
+        IllegalAccessLogger.Mode mode = switch (illegalAccess) {
+            case "permit" -> IllegalAccessLogger.Mode.ONESHOT;
+            case "warn"   -> IllegalAccessLogger.Mode.WARN;
+            case "debug"  -> IllegalAccessLogger.Mode.DEBUG;
+            default -> {
+                fail("Value specified to --illegal-access not recognized:"
+                        + " '" + illegalAccess + "'");
+                yield null;
+            }
+        };
+
+        var builder = new IllegalAccessLogger.Builder(mode, System.err);
+        Map<String, Set<String>> concealedPackagesToOpen = systemModules.concealedPackagesToOpen();
+        Map<String, Set<String>> exportedPackagesToOpen = systemModules.exportedPackagesToOpen();
+        if (concealedPackagesToOpen.isEmpty() && exportedPackagesToOpen.isEmpty()) {
+            // need to generate (exploded build)
+            IllegalAccessMaps maps = IllegalAccessMaps.generate(limitedFinder());
+            concealedPackagesToOpen = maps.concealedPackagesToOpen();
+            exportedPackagesToOpen = maps.exportedPackagesToOpen();
+        }
+
+        // open specific packages in the system modules
+        Set<String> emptySet = Set.of();
+        for (Module m : bootLayer.modules()) {
+            ModuleDescriptor descriptor = m.getDescriptor();
+            String name = m.getName();
+
+            // skip open modules
+            if (descriptor.isOpen()) {
+                continue;
+            }
+
+            // skip modules loaded from the upgrade module path
+            if (upgradeModulePath != null
+                && upgradeModulePath.find(name).isPresent()) {
+                continue;
+            }
+
+            Set<String> concealedPackages = concealedPackagesToOpen.getOrDefault(name, emptySet);
+            Set<String> exportedPackages = exportedPackagesToOpen.getOrDefault(name, emptySet);
+
+            // refresh the set of concealed and exported packages if needed
+            if (extraExportsOrOpens) {
+                concealedPackages = new HashSet<>(concealedPackages);
+                exportedPackages = new HashSet<>(exportedPackages);
+                Iterator<String> iterator = concealedPackages.iterator();
+                while (iterator.hasNext()) {
+                    String pn = iterator.next();
+                    if (m.isExported(pn, BootLoader.getUnnamedModule())) {
+                        // concealed package is exported to ALL-UNNAMED
+                        iterator.remove();
+                        exportedPackages.add(pn);
+                    }
+                }
+                iterator = exportedPackages.iterator();
+                while (iterator.hasNext()) {
+                    String pn = iterator.next();
+                    if (m.isOpen(pn, BootLoader.getUnnamedModule())) {
+                        // exported package is opened to ALL-UNNAMED
+                        iterator.remove();
+                    }
                 }
             }
-        }
-    }
 
-    /**
-     * Returns the set of module names specified by --enable-native-access options.
-     */
-    private static Set<String> decodeEnableNativeAccess() {
-        String prefix = "jdk.module.enable.native.access.";
-        int index = 0;
-        // the system property is removed after decoding
-        String value = getAndRemoveProperty(prefix + index);
-        Set<String> modules = new HashSet<>();
-        if (value == null) {
-            return modules;
+            // log reflective access to all types in concealed packages
+            builder.logAccessToConcealedPackages(m, concealedPackages);
+
+            // log reflective access to non-public members/types in exported packages
+            builder.logAccessToExportedPackages(m, exportedPackages);
+
+            // open the packages to unnamed modules
+            JLA.addOpensToAllUnnamed(m, concealedPackages, exportedPackages);
         }
-        while (value != null) {
-            for (String s : value.split(",")) {
-                if (!s.isEmpty())
-                    modules.add(s);
-            }
-            index++;
-            value = getAndRemoveProperty(prefix + index);
-        }
-        return modules;
+
+        builder.complete();
     }
 
     /**
