@@ -839,37 +839,34 @@ public final class ModuleBootstrap {
         return modules;
     }
 
+
     /**
-     * Process the --illegal-access option (and its default) to open packages
-     * of system modules in the boot layer to code in unnamed modules.
+     * Process the --illegal-access option to open packages of system modules
+     * in the boot layer to code in unnamed modules.
      */
-    private static IllegalAccessLogger.Builder
-        addIllegalAccess(ModuleFinder upgradeModulePath,
-                         Map<String, Set<String>> concealedPackagesToOpen,
-                         Map<String, Set<String>> exportedPackagesToOpen,
-                         ModuleLayer bootLayer,
-                         boolean extraExportsOrOpens) {
-        String value = getAndRemoveProperty("jdk.module.illegalAccess");
-        IllegalAccessLogger.Mode mode = IllegalAccessLogger.Mode.ONESHOT;
-        if (value != null) {
-            switch (value) {
-                case "deny":
-                    return null;
-                case "permit":
-                    break;
-                case "warn":
-                    mode = IllegalAccessLogger.Mode.WARN;
-                    break;
-                case "debug":
-                    mode = IllegalAccessLogger.Mode.DEBUG;
-                    break;
-                default:
-                    fail("Value specified to --illegal-access not recognized:"
-                            + " '" + value + "'");
-                    return null;
-             }
-        IllegalAccessLogger.Builder builder
-            = new IllegalAccessLogger.Builder(mode, System.err);
+    private static void addIllegalAccess(String illegalAccess,
+                                         SystemModules systemModules,
+                                         ModuleFinder upgradeModulePath,
+                                         ModuleLayer bootLayer,
+                                         boolean extraExportsOrOpens) {
+
+        if (illegalAccess.equals("deny"))
+            return;  // nothing to do
+
+        IllegalAccessLogger.Mode mode = switch (illegalAccess) {
+            case "permit" -> IllegalAccessLogger.Mode.ONESHOT;
+            case "warn"   -> IllegalAccessLogger.Mode.WARN;
+            case "debug"  -> IllegalAccessLogger.Mode.DEBUG;
+            default -> {
+                fail("Value specified to --illegal-access not recognized:"
+                        + " '" + illegalAccess + "'");
+                yield null;
+            }
+        };
+
+        var builder = new IllegalAccessLogger.Builder(mode, System.err);
+        Map<String, Set<String>> concealedPackagesToOpen = systemModules.concealedPackagesToOpen();
+        Map<String, Set<String>> exportedPackagesToOpen = systemModules.exportedPackagesToOpen();
         if (concealedPackagesToOpen.isEmpty() && exportedPackagesToOpen.isEmpty()) {
             // need to generate (exploded build)
             IllegalAccessMaps maps = IllegalAccessMaps.generate(limitedFinder());
@@ -931,7 +928,6 @@ public final class ModuleBootstrap {
         }
 
         builder.complete();
-        return builder;
     }
 
     /**
