@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -239,13 +239,13 @@ public class IllegalAccessTest {
     }
 
     @Test(dataProvider = "denyCases")
-    public void testDefault(String action, Result expectedResult) throws Exception {
-        run(action, expectedResult);
-    }
-
-    @Test(dataProvider = "denyCases")
     public void testDeny(String action, Result expectedResult) throws Exception {
         run(action, expectedResult, "--illegal-access=deny");
+    }
+
+    @Test(dataProvider = "permitCases")
+    public void testDefault(String action, Result expectedResult) throws Exception {
+        run(action, expectedResult);
     }
 
     @Test(dataProvider = "permitCases")
@@ -267,42 +267,41 @@ public class IllegalAccessTest {
         run(action, expectedResult, "--illegal-access=debug");
     }
 
+
     /**
      * Specify --add-exports to export a package
      */
     public void testWithAddExportsOption() throws Exception {
-        // not accessible
-        run("reflectPublicMemberNonExportedPackage", fail("IllegalAccessException"));
+        // warning
+        run("reflectPublicMemberNonExportedPackage", successWithWarning());
 
-        // should succeed with --add-exports
+        // no warning due to --add-exports
         run("reflectPublicMemberNonExportedPackage", successNoWarning(),
                 "--add-exports", "java.base/sun.security.x509=ALL-UNNAMED");
 
-        // not accessible
-        run("setAccessibleNonPublicMemberNonExportedPackage", fail("InaccessibleObjectException"));
-
-        // should fail as --add-exports does not open package
-        run("setAccessibleNonPublicMemberNonExportedPackage", fail("InaccessibleObjectException"),
-                "--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED");
+        // attempt two illegal accesses, one allowed by --add-exports
+        run("reflectPublicMemberNonExportedPackage"
+                + ",setAccessibleNonPublicMemberExportedPackage",
+            successWithWarning(),
+            "--add-exports", "java.base/sun.security.x509=ALL-UNNAMED");
     }
 
     /**
      * Specify --add-open to open a package
      */
     public void testWithAddOpensOption() throws Exception {
-        // not accessible
-        run("reflectPublicMemberNonExportedPackage", fail("IllegalAccessException"));
+        // warning
+        run("setAccessibleNonPublicMemberExportedPackage", successWithWarning());
 
-        // should succeed with --add-opens
-        run("reflectPublicMemberNonExportedPackage", successNoWarning(),
-                "--add-opens", "java.base/sun.security.x509=ALL-UNNAMED");
-
-        // not accessible
-        run("setAccessibleNonPublicMemberExportedPackage", fail("InaccessibleObjectException"));
-
-        // should succeed with --add-opens
+        // no warning due to --add-opens
         run("setAccessibleNonPublicMemberExportedPackage", successNoWarning(),
                 "--add-opens", "java.base/java.lang=ALL-UNNAMED");
+
+        // attempt two illegal accesses, one allowed by --add-opens
+        run("reflectPublicMemberNonExportedPackage"
+                + ",setAccessibleNonPublicMemberExportedPackage",
+            successWithWarning(),
+            "--add-opens", "java.base/java.lang=ALL-UNNAMED");
     }
 
     /**
@@ -374,20 +373,19 @@ public class IllegalAccessTest {
         Attributes attrs = man.getMainAttributes();
         attrs.put(Attributes.Name.MANIFEST_VERSION, "1.0");
         attrs.put(Attributes.Name.MAIN_CLASS, "TryAccess");
-        attrs.put(new Attributes.Name("Add-Exports"),
-                  "java.base/sun.security.x509 java.base/sun.nio.ch");
+        attrs.put(new Attributes.Name("Add-Exports"), "java.base/sun.security.x509");
         Path jarfile = Paths.get("x.jar");
         Path classes = Paths.get(TEST_CLASSES);
         JarUtils.createJarFile(jarfile, man, classes, Paths.get("TryAccess.class"));
 
         run(jarfile, "reflectPublicMemberNonExportedPackage", successNoWarning());
 
-        run(jarfile, "reflectPublicMemberNonExportedPackage", successNoWarning(),
-                "--illegal-access=permit");
+        run(jarfile, "setAccessibleNonPublicMemberExportedPackage", successWithWarning());
 
-        // should fail as Add-Exports does not open package
-        run(jarfile, "setAccessibleNonPublicMemberNonExportedPackage",
-            fail("InaccessibleObjectException"));
+        // attempt two illegal accesses, one allowed by Add-Exports
+        run(jarfile, "reflectPublicMemberNonExportedPackage,"
+                + "setAccessibleNonPublicMemberExportedPackage",
+            successWithWarning());
     }
 
     /**
@@ -405,26 +403,29 @@ public class IllegalAccessTest {
 
         run(jarfile, "setAccessibleNonPublicMemberExportedPackage", successNoWarning());
 
-        run(jarfile, "setAccessibleNonPublicMemberExportedPackage", successNoWarning(),
-                "--illegal-access=permit");
+        run(jarfile, "reflectPublicMemberNonExportedPackage", successWithWarning());
+
+        // attempt two illegal accesses, one allowed by Add-Opens
+        run(jarfile, "reflectPublicMemberNonExportedPackage,"
+                + "setAccessibleNonPublicMemberExportedPackage",
+            successWithWarning());
     }
 
     /**
-     * Test that --illegal-access=permit behavior is to print a warning on the
-     * first illegal access only.
+     * Test that default behavior is to print a warning on the first illegal
+     * access only.
      */
     public void testWarnOnFirstIllegalAccess() throws Exception {
         String action1 = "reflectPublicMemberNonExportedPackage";
         String action2 = "setAccessibleNonPublicMemberExportedPackage";
-        int warningCount = count(run(action1, "--illegal-access=permit").asLines(), "WARNING");
-        assertTrue(warningCount > 0);  // multi line warning
+        int warningCount = count(run(action1).asLines(), "WARNING");
 
         // same illegal access
-        List<String> output1 = run(action1 + "," + action1, "--illegal-access=permit").asLines();
+        List<String> output1 = run(action1 + "," + action1).asLines();
         assertTrue(count(output1, "WARNING") == warningCount);
 
         // different illegal access
-        List<String> output2 = run(action1 + "," + action2, "--illegal-access=permit").asLines();
+        List<String> output2 = run(action1 + "," + action2).asLines();
         assertTrue(count(output2, "WARNING") == warningCount);
     }
 

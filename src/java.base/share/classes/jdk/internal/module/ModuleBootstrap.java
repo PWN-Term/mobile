@@ -141,14 +141,14 @@ public final class ModuleBootstrap {
     private static boolean canUseArchivedBootLayer() {
         return getProperty("jdk.module.upgrade.path") == null &&
                getProperty("jdk.module.path") == null &&
-               getProperty("jdk.module.patch.0") == null &&       // --patch-module
-               getProperty("jdk.module.main") == null &&          // --module
-               getProperty("jdk.module.addmods.0") == null  &&    // --add-modules
-               getProperty("jdk.module.limitmods") == null &&     // --limit-modules
+               getProperty("jdk.module.patch.0") == null &&    // --patch-module
+               getProperty("jdk.module.main") == null &&
+               getProperty("jdk.module.addmods.0") == null  && // --add-modules
+               getProperty("jdk.module.limitmods") == null &&
                getProperty("jdk.module.addreads.0") == null &&    // --add-reads
                getProperty("jdk.module.addexports.0") == null &&  // --add-exports
                getProperty("jdk.module.addopens.0") == null &&    // --add-opens
-               getProperty("jdk.module.illegalAccess") == null;   // --illegal-access
+               getProperty("jdk.module.illegalAccess") == null;
     }
 
     /**
@@ -172,6 +172,12 @@ public final class ModuleBootstrap {
             // assume boot layer has at least one module providing a service
             // that is mapped to the application class loader.
             JLA.bindToLoader(bootLayer, ClassLoaders.appClassLoader());
+
+            // IllegalAccessLogger needs to be set
+            var illegalAccessLoggerBuilder = archivedBootLayer.illegalAccessLoggerBuilder();
+            if (illegalAccessLoggerBuilder != null) {
+                illegalAccessLoggerBuilder.complete();
+            }
         } else {
             bootLayer = boot2();
         }
@@ -186,10 +192,10 @@ public final class ModuleBootstrap {
         ModuleFinder upgradeModulePath = finderFor("jdk.module.upgrade.path");
         ModuleFinder appModulePath = finderFor("jdk.module.path");
         boolean isPatched = patcher.hasPatches();
+
         String mainModule = System.getProperty("jdk.module.main");
         Set<String> addModules = addModules();
         Set<String> limitModules = limitModules();
-        String illegalAccess = getAndRemoveProperty("jdk.module.illegalAccess");
 
         PrintStream traceOutput = null;
         String trace = getAndRemoveProperty("jdk.module.showModuleResolution");
@@ -221,8 +227,7 @@ public final class ModuleBootstrap {
                 && !haveModulePath
                 && addModules.isEmpty()
                 && limitModules.isEmpty()
-                && !isPatched
-                && illegalAccess == null) {
+                && !isPatched) {
             systemModuleFinder = archivedModuleGraph.finder();
             hasSplitPackages = archivedModuleGraph.hasSplitPackages();
             hasIncubatorModules = archivedModuleGraph.hasIncubatorModules();
@@ -461,15 +466,21 @@ public final class ModuleBootstrap {
         addExtraReads(bootLayer);
         boolean extraExportsOrOpens = addExtraExportsAndOpens(bootLayer);
 
-        if (illegalAccess != null) {
-            assert systemModules != null;
-            addIllegalAccess(illegalAccess,
-                             systemModules,
-                             upgradeModulePath,
+        Map<String, Set<String>> concealedPackagesToOpen;
+        Map<String, Set<String>> exportedPackagesToOpen;
+        if (archivedModuleGraph != null) {
+            concealedPackagesToOpen = archivedModuleGraph.concealedPackagesToOpen();
+            exportedPackagesToOpen = archivedModuleGraph.exportedPackagesToOpen();
+        } else {
+            concealedPackagesToOpen = systemModules.concealedPackagesToOpen();
+            exportedPackagesToOpen = systemModules.exportedPackagesToOpen();
+        }
+        IllegalAccessLogger.Builder builder =
+            addIllegalAccess(upgradeModulePath,
+                             concealedPackagesToOpen,
+                             exportedPackagesToOpen,
                              bootLayer,
                              extraExportsOrOpens);
-        }
-
         Counters.add("jdk.module.boot.7.adjustModulesTime");
 
         // save module finders for later use
@@ -486,9 +497,12 @@ public final class ModuleBootstrap {
                                         hasIncubatorModules,
                                         systemModuleFinder,
                                         cf,
-                                        clf);
+                                        clf,
+                                        concealedPackagesToOpen,
+                                        exportedPackagesToOpen);
+
             if (!hasSplitPackages && !hasIncubatorModules) {
-                ArchivedBootLayer.archive(bootLayer);
+                ArchivedBootLayer.archive(bootLayer, builder);
             }
         }
 
@@ -782,32 +796,38 @@ public final class ModuleBootstrap {
     }
 
     /**
-     * Process the --illegal-access option to open packages of system modules
-     * in the boot layer to code in unnamed modules.
+     * Process the --illegal-access option (and its default) to open packages
+     * of system modules in the boot layer to code in unnamed modules.
      */
-    private static void addIllegalAccess(String illegalAccess,
-                                         SystemModules systemModules,
-                                         ModuleFinder upgradeModulePath,
-                                         ModuleLayer bootLayer,
-                                         boolean extraExportsOrOpens) {
-
-        if (illegalAccess.equals("deny"))
-            return;  // nothing to do
-
-        IllegalAccessLogger.Mode mode = switch (illegalAccess) {
-            case "permit" -> IllegalAccessLogger.Mode.ONESHOT;
-            case "warn"   -> IllegalAccessLogger.Mode.WARN;
-            case "debug"  -> IllegalAccessLogger.Mode.DEBUG;
-            default -> {
-                fail("Value specified to --illegal-access not recognized:"
-                        + " '" + illegalAccess + "'");
-                yield null;
+    private static IllegalAccessLogger.Builder
+        addIllegalAccess(ModuleFinder upgradeModulePath,
+                         Map<String, Set<String>> concealedPackagesToOpen,
+                         Map<String, Set<String>> exportedPackagesToOpen,
+                         ModuleLayer bootLayer,
+                         boolean extraExportsOrOpens) {
+        String value = getAndRemoveProperty("jdk.module.illegalAccess");
+        IllegalAccessLogger.Mode mode = IllegalAccessLogger.Mode.ONESHOT;
+        if (value != null) {
+            switch (value) {
+                case "deny":
+                    return null;
+                case "permit":
+                    break;
+                case "warn":
+                    mode = IllegalAccessLogger.Mode.WARN;
+                    break;
+                case "debug":
+                    mode = IllegalAccessLogger.Mode.DEBUG;
+                    break;
+                default:
+                    fail("Value specified to --illegal-access not recognized:"
+                            + " '" + value + "'");
+                    return null;
             }
-        };
+        }
+        IllegalAccessLogger.Builder builder
+            = new IllegalAccessLogger.Builder(mode, System.err);
 
-        var builder = new IllegalAccessLogger.Builder(mode, System.err);
-        Map<String, Set<String>> concealedPackagesToOpen = systemModules.concealedPackagesToOpen();
-        Map<String, Set<String>> exportedPackagesToOpen = systemModules.exportedPackagesToOpen();
         if (concealedPackagesToOpen.isEmpty() && exportedPackagesToOpen.isEmpty()) {
             // need to generate (exploded build)
             IllegalAccessMaps maps = IllegalAccessMaps.generate(limitedFinder());
@@ -869,6 +889,7 @@ public final class ModuleBootstrap {
         }
 
         builder.complete();
+        return builder;
     }
 
     /**
